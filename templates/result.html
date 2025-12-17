@@ -19,6 +19,9 @@
     
     <div class="summary-box">
         <h3>Streszczenie:</h3>
+        {% if summary_length_label %}
+            <p><strong>Długość:</strong> {{ summary_length_label }}</p>
+        {% endif %}
         <p>{{ summary }}</p>
     </div>
 

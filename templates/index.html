@@ -19,6 +19,13 @@
     <form method="POST">
         <label for="text">Wpisz tekst do streszczenia:</label><br>
         <textarea name="text" id="text" required></textarea><br>
+
+        <label for="summary_length">Długość streszczenia:</label>
+        <select name="summary_length" id="summary_length">
+            <option value="short">krótkie</option>
+            <option value="medium" selected>średnie</option>
+            <option value="long">długie</option>
+        </select><br><br>
         
         <label for="lang">Język definicji:</label>
         <select name="lang" id="lang">

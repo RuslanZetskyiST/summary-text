@@ -14,9 +14,28 @@ summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
 print("Model załadowany.")
 
 
-def summarize_auto(text):
+def summarize_auto(text, summary_length="medium"):
     tokenizer = summarizer.tokenizer
     model = summarizer.model
+
+    length_profiles = {
+        "short": {
+            "final": {"max_length": 80, "min_length": 20},
+            "partial": {"max_length": 60, "min_length": 20},
+            "final_long": {"max_length": 90, "min_length": 25},
+        },
+        "medium": {
+            "final": {"max_length": 150, "min_length": 40},
+            "partial": {"max_length": 120, "min_length": 40},
+            "final_long": {"max_length": 150, "min_length": 60},
+        },
+        "long": {
+            "final": {"max_length": 220, "min_length": 80},
+            "partial": {"max_length": 160, "min_length": 60},
+            "final_long": {"max_length": 220, "min_length": 90},
+        },
+    }
+    profile = length_profiles.get(summary_length, length_profiles["medium"])
 
     model_limit = getattr(getattr(model, "config", None), "max_position_embeddings", None)
     tokenizer_limit = getattr(tokenizer, "model_max_length", None)
@@ -31,7 +50,7 @@ def summarize_auto(text):
 
     chunk_size = max(128, max_input_tokens - 2)
 
-    def summarize_once(text_part, max_len=150, min_len=40):
+    def summarize_once(text_part, max_len, min_len):
         out = summarizer(
             text_part,
             max_length=max_len,
@@ -48,22 +67,44 @@ def summarize_auto(text):
 
     input_len = len(tokenizer.encode(text, add_special_tokens=False))
     if input_len <= max_input_tokens:
-        return summarize_once(text, max_len=150, min_len=40)
+        return summarize_once(text, max_len=profile["final"]["max_length"], min_len=profile["final"]["min_length"])
 
     current = text
     for _ in range(3):
         parts = list(split_by_tokens(current))
         if len(parts) == 1:
-            return summarize_once(parts[0], max_len=150, min_len=40)
+            return summarize_once(
+                parts[0],
+                max_len=profile["final"]["max_length"],
+                min_len=profile["final"]["min_length"],
+            )
 
-        partial_summaries = [summarize_once(p, max_len=120, min_len=40) for p in parts]
+        partial_summaries = [
+            summarize_once(
+                p,
+                max_len=profile["partial"]["max_length"],
+                min_len=profile["partial"]["min_length"],
+            )
+            for p in parts
+        ]
         current = " ".join(partial_summaries)
 
         if len(tokenizer.encode(current, add_special_tokens=False)) <= max_input_tokens:
-            return summarize_once(current, max_len=150, min_len=60)
+            return summarize_once(
+                current,
+                max_len=profile["final_long"]["max_length"],
+                min_len=profile["final_long"]["min_length"],
+            )
 
     parts = list(split_by_tokens(current))
-    partial_summaries = [summarize_once(p, max_len=120, min_len=40) for p in parts]
+    partial_summaries = [
+        summarize_once(
+            p,
+            max_len=profile["partial"]["max_length"],
+            min_len=profile["partial"]["min_length"],
+        )
+        for p in parts
+    ]
     return " ".join(partial_summaries)
 
 LANG_CONFIG = {
@@ -198,16 +239,29 @@ def index():
     if request.method == 'POST':
         text = request.form.get('text')
         lang = request.form.get('lang', 'en')
+        summary_length = request.form.get('summary_length', 'medium')
         
         if not text:
             return render_template('index.html', error="Please enter some text.")
 
-        summary = summarize_auto(text)
+        summary = summarize_auto(text, summary_length=summary_length)
         
         difficult_words = extract_difficult_words(text, lang)
         definitions = get_definitions(difficult_words[:10], lang)
 
-        return render_template('result.html', summary=summary, definitions=definitions, original_text=text, lang=lang)
+        summary_length_labels = {
+            "short": "krótkie",
+            "medium": "średnie",
+            "long": "długie",
+        }
+        return render_template(
+            'result.html',
+            summary=summary,
+            definitions=definitions,
+            original_text=text,
+            lang=lang,
+            summary_length_label=summary_length_labels.get(summary_length),
+        )
     
     return render_template('index.html')
 
