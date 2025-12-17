@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Streszczanie tekstu</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        textarea { width: 100%; height: 200px; margin-bottom: 10px; }
+        button { padding: 10px 20px; cursor: pointer; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>Streszczanie tekstu</h1>
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+    <form method="POST">
+        <label for="text">Wpisz tekst do streszczenia:</label><br>
+        <textarea name="text" id="text" required></textarea><br>
+        
+        <label for="lang">Język definicji:</label>
+        <select name="lang" id="lang">
+            <option value="en">angielski</option>
+            <option value="pl">polski</option>
+            <option value="de">niemiecki</option>
+            <option value="es">hiszpański</option>
+        </select><br><br>
+
+        <button type="submit">Streszczaj</button>
+    </form>
+</body>
+</html>

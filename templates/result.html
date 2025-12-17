@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wynik streszczenia</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .summary-box { background-color: #f9f9f9; padding: 15px; border: 1px solid #ddd; margin-bottom: 20px; }
+        .definitions { margin-top: 20px; }
+        .def-item { margin-bottom: 10px; }
+        .download-buttons { margin-top: 20px; }
+        button { padding: 10px 20px; cursor: pointer; margin-right: 10px; }
+        a { text-decoration: none; }
+    </style>
+</head>
+<body>
+    <h1>Wynik streszczenia</h1>
+    
+    <div class="summary-box">
+        <h3>Streszczenie:</h3>
+        <p>{{ summary }}</p>
+    </div>
+
+    <div class="download-buttons">
+        <form action="/download/txt" method="POST" style="display:inline;">
+            <input type="hidden" name="summary" value="{{ summary }}">
+            <button type="submit">Pobierz TXT</button>
+        </form>
+        <form action="/download/pdf" method="POST" style="display:inline;">
+            <input type="hidden" name="summary" value="{{ summary }}">
+            <button type="submit">Pobierz PDF</button>
+        </form>
+    </div>
+
+    <div class="definitions">
+        <h3>Trudne słowa i definicje ({{ lang }}):</h3>
+        {% if definitions %}
+            <ul>
+            {% for word, defs in definitions.items() %}
+                <li class="def-item">
+                    <strong>{{ word }}</strong>:
+                    <ul>
+                        {% for d in defs %}
+                            <li>{{ d }}</li>
+                        {% endfor %}
+                    </ul>
+                </li>
+            {% endfor %}
+            </ul>
+        {% else %}
+            <p>Nie znaleziono trudnych słów lub definicje są niedostępne.</p>
+        {% endif %}
+    </div>
+
+    <br>
+    <a href="/">Powrót do strony głównej</a>
+</body>
+</html>

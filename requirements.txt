@@ -1,0 +1,6 @@
+flask
+transformers
+sentencepiece
+fpdf
+requests
+torch
