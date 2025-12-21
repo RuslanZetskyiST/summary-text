@@ -133,6 +133,23 @@ STOPWORDS = {
     "en": set(["and","or","the","is","are","of","to","in","for","on","with"]),
 }
 
+lang_detector = pipeline(
+    "text-classification",
+    model="papluca/xlm-roberta-base-language-detection"
+)
+
+@app.route('/detect-language', methods=['POST'])
+def detect_language():
+    text = request.json.get("text", "")
+    if not text.strip():
+        return {"lang": None}
+
+    result = lang_detector(text[:500])
+    lang = result[0]["label"]
+
+    return {"lang": lang}
+
+
 def extract_difficult_words(text, lang="en"):
     words = [
         w.strip(string.punctuation).lower()

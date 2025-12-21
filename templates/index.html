@@ -1,20 +1,86 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pl">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Streszczanie tekstu</title>
     <style>
-        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-        textarea { width: 100%; height: 200px; margin-bottom: 10px; }
-        button { padding: 10px 20px; cursor: pointer; }
-        .error { color: red; }
+        :root {
+            --bg: #ffffff;
+            --text: #111111;
+            --card: #f2f2f2;
+            --border: #cccccc;
+            --button: #007bff;
+            --button-text: #ffffff;
+        }
+
+        body.dark {
+            --bg: #1e1e1e;
+            --text: #eaeaea;
+            --card: #2b2b2b;
+            --border: #444444;
+            --button: #4dabf7;
+            --button-text: #000000;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            transition: all 0.3s;
+        }
+
+        textarea,
+        select {
+            width: 100%;
+            padding: 10px;
+            margin-top: 5px;
+            background: var(--card);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
+
+        textarea {
+            height: 300px;
+            resize: vertical;
+        }
+
+        button {
+            background: var(--button);
+            color: var(--button-text);
+            border: none;
+            padding: 10px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        .error {
+            color: #ff2a2a;
+        }
+
+        .theme-toggle {
+            float: right;
+            margin-bottom: 10px;
+        }
     </style>
+
 </head>
+
 <body>
+    <button class="theme-toggle" id="themeToggle">🌙 Ciemny motyw</button>
     <h1>Streszczanie tekstu</h1>
     {% if error %}
-        <p class="error">{{ error }}</p>
+    <p class="error">{{ error }}</p>
     {% endif %}
     <form method="POST">
         <label for="text">Wpisz tekst do streszczenia:</label><br>
@@ -26,7 +92,8 @@
             <option value="medium" selected>średnie</option>
             <option value="long">długie</option>
         </select><br><br>
-        
+
+        <p id="detected-lang">Odnaleziony język: —</p>
         <label for="lang">Język definicji:</label>
         <select name="lang" id="lang">
             <option value="en">angielski</option>
@@ -37,5 +104,64 @@
 
         <button type="submit">Streszczaj</button>
     </form>
+    <script>
+        const toggleBtn = document.getElementById("themeToggle");
+        const body = document.body;
+
+        const savedTheme = localStorage.getItem("theme");
+        if (savedTheme === "dark") {
+            body.classList.add("dark");
+            toggleBtn.textContent = "☀️ Jasny motyw";
+        }
+
+        toggleBtn.addEventListener("click", () => {
+            body.classList.toggle("dark");
+
+            const isDark = body.classList.contains("dark");
+            localStorage.setItem("theme", isDark ? "dark" : "light");
+            toggleBtn.textContent = isDark ? "☀️ Jasny motyw" : "🌙 Ciemny motyw";
+        });
+
+        async function detectLanguage() {
+            const textarea = document.querySelector("textarea[name='text']");
+            const select = document.querySelector("select[name='lang']");
+            const output = document.getElementById("detected-lang");
+
+            if (!textarea.value.trim()) return;
+
+            const res = await fetch("/detect-language", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ text: textarea.value })
+            });
+
+            const data = await res.json();
+
+            const map = {
+                "pl": "Polski ",
+                "en": "English ",
+                "de": "Deutsch ",
+                "es": "Español "
+            };
+
+            const mapFlags = {
+                "pl": '<img src="https://flagcdn.com/64x48/pl.png" srcset="https://flagcdn.com/128x96/pl.png 2x, https://flagcdn.com/192x144/pl.png 3x" width="16" height="12">',
+                "en": '<img src="https://flagcdn.com/64x48/gb.png" srcset="https://flagcdn.com/128x96/gb.png 2x, https://flagcdn.com/192x144/gb.png 3x" width="16" height="12">',
+                "de": '<img src="https://flagcdn.com/64x48/de.png" srcset="https://flagcdn.com/128x96/de.png 2x, https://flagcdn.com/192x144/de.png 3x" width="16" height="12">',
+                "es": '<img src="https://flagcdn.com/64x48/es.png" srcset="https://flagcdn.com/128x96/es.png 2x, https://flagcdn.com/192x144/es.png 3x" width="16" height="12">'
+            }
+
+            if (data.lang) {
+                output.innerHTML = "Odnaleziony język: " + (map[data.lang] || data.lang) + (mapFlags[data.lang] || "");
+                if (map[data.lang]) select.value = data.lang;
+                if (mapFlags[data.lang]) select.value = data.lang;
+            }
+        }
+
+        document.querySelector("textarea[name='text']")
+            .addEventListener("blur", detectLanguage);
+    </script>
+
 </body>
+
 </html>

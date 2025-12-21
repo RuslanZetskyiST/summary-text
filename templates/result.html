@@ -1,26 +1,104 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pl">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wynik streszczenia</title>
     <style>
-        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-        .summary-box { background-color: #f9f9f9; padding: 15px; border: 1px solid #ddd; margin-bottom: 20px; }
-        .definitions { margin-top: 20px; }
-        .def-item { margin-bottom: 10px; }
-        .download-buttons { margin-top: 20px; }
-        button { padding: 10px 20px; cursor: pointer; margin-right: 10px; }
-        a { text-decoration: none; }
+        :root {
+            --bg: #ffffff;
+            --text: #111111;
+            --card: #f9f9f9;
+            --border: #dddddd;
+            --button: #007bff;
+            --button-text: #ffffff;
+            --link: #007bff;
+        }
+
+        body.dark {
+            --bg: #1e1e1e;
+            --text: #eaeaea;
+            --card: #2b2b2b;
+            --border: #444444;
+            --button: #4dabf7;
+            --button-text: #000000;
+            --link: #4dabf7;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            transition: all 0.3s;
+        }
+
+        .summary-box {
+            background: var(--card);
+            padding: 15px;
+            border: 1px solid var(--border);
+            margin-bottom: 20px;
+            border-radius: 6px;
+        }
+
+        button {
+            padding: 10px 20px;
+            cursor: pointer;
+            background: var(--button);
+            color: var(--button-text);
+            border: none;
+            border-radius: 6px;
+            font-size: 15px;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        .download-buttons {
+            margin-top: 20px;
+        }
+
+        .definitions {
+            margin-top: 20px;
+        }
+
+        .def-item {
+            margin-bottom: 10px;
+        }
+
+        a {
+            text-decoration: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            background: var(--button);
+            color: var(--button-text);
+            border: none;
+            border-radius: 6px;
+            font-size: 15px;
+        }
+
+        a:hover {
+            opacity: 0.9;
+        }
+
+        .theme-toggle {
+            float: right;
+            margin-bottom: 10px;
+        }
     </style>
 </head>
+
 <body>
+    <button class="theme-toggle" id="themeToggle">🌙 Ciemny motyw</button>
     <h1>Wynik streszczenia</h1>
-    
     <div class="summary-box">
         <h3>Streszczenie:</h3>
         {% if summary_length_label %}
-            <p><strong>Długość:</strong> {{ summary_length_label }}</p>
+        <p><strong>Długość:</strong> {{ summary_length_label }}</p>
         {% endif %}
         <p>{{ summary }}</p>
     </div>
@@ -39,24 +117,44 @@
     <div class="definitions">
         <h3>Trudne słowa i definicje ({{ lang }}):</h3>
         {% if definitions %}
-            <ul>
+        <ul>
             {% for word, defs in definitions.items() %}
-                <li class="def-item">
-                    <strong>{{ word }}</strong>:
-                    <ul>
-                        {% for d in defs %}
-                            <li>{{ d }}</li>
-                        {% endfor %}
-                    </ul>
-                </li>
+            <li class="def-item">
+                <strong>{{ word }}</strong>:
+                <ul>
+                    {% for d in defs %}
+                    <li>{{ d }}</li>
+                    {% endfor %}
+                </ul>
+            </li>
             {% endfor %}
-            </ul>
+        </ul>
         {% else %}
-            <p>Nie znaleziono trudnych słów lub definicje są niedostępne.</p>
+        <p>Nie znaleziono trudnych słów lub definicje są niedostępne.</p>
         {% endif %}
     </div>
 
     <br>
     <a href="/">Powrót do strony głównej</a>
+    <script>
+        const toggleBtn = document.getElementById("themeToggle");
+        const body = document.body;
+
+        const savedTheme = localStorage.getItem("theme");
+        if (savedTheme === "dark") {
+            body.classList.add("dark");
+            toggleBtn.textContent = "☀️ Jasny motyw";
+        }
+
+        toggleBtn.addEventListener("click", () => {
+            body.classList.toggle("dark");
+
+            const isDark = body.classList.contains("dark");
+            localStorage.setItem("theme", isDark ? "dark" : "light");
+            toggleBtn.textContent = isDark ? "☀️ Jasny motyw" : "🌙 Ciemny motyw";
+        });
+    </script>
+
 </body>
+
 </html>
