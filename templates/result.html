@@ -144,6 +144,9 @@
         {% if summary_length_label %}
         <p><strong>Długość:</strong> {{ summary_length_label }}</p>
         {% endif %}
+         {% if faithfulness_percent is not none %}
+        <p><strong>Zgodność (TF-IDF):</strong> {{ faithfulness_percent|round(1) }}%</p>
+        {% endif %}
         <textarea readonly rows="8">{{ summary }}</textarea>
     </div>
     <!-- KONIEC DODANEJ FUNKCJONALNOŚCI -->

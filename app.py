@@ -5,6 +5,8 @@ import requests
 import re
 import string
 import io
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 app = Flask(__name__)
 
@@ -167,6 +169,79 @@ def detect_language():
 
     return {"lang": lang}
 
+# --- DODANA FUNKCJONALNOŚĆ: ocena zgodności streszczenia (NLI entailment) ---
+nli_checker = None
+try:
+    nli_checker = pipeline(
+        "text-classification",
+        model="facebook/bart-large-mnli",
+        truncation=True,
+    )
+except Exception as e:
+    print(f"Nie udało się załadować modelu NLI (sprawdzanie zgodności). Pomijam. Błąd: {e}")
+
+def estimate_summary_faithfulness(original_text, summary):
+    if not nli_checker:
+        return None
+
+    if not original_text or not original_text.strip() or not summary or not summary.strip():
+        return 0.0
+
+    tokenizer = summarizer.tokenizer
+
+    chunk_size = 256
+    ids = tokenizer.encode(original_text, add_special_tokens=False)
+
+    chunks = []
+    for i in range(0, len(ids), chunk_size):
+        chunk_ids = ids[i:i + chunk_size]
+        chunk_text = tokenizer.decode(chunk_ids, skip_special_tokens=True).strip()
+        if chunk_text:
+            chunks.append(chunk_text)
+
+    if not chunks:
+        return 0.0
+
+    chunks = chunks[:10]
+
+    entail_scores = []
+    weights = []
+
+    for ch in chunks:
+        out = nli_checker(
+            {"text": ch, "text_pair": summary},
+            return_all_scores=True
+        )
+
+        scores = out[0] if out and isinstance(out, list) else []
+        entail = None
+
+        for s in scores:
+            lab = str(s.get("label", "")).upper()
+            if "ENTAIL" in lab or lab == "LABEL_2":
+                entail = float(s.get("score", 0.0))
+                break
+
+        if entail is None:
+            entail = 0.0
+
+        entail_scores.append(entail)
+        weights.append(max(1, len(ch)))
+
+    weighted = sum(s * w for s, w in zip(entail_scores, weights)) / sum(weights)
+    return weighted * 100.0
+# --- KONIEC DODANEJ FUNKCJONALNOŚCI ---
+# --- DODANA FUNKCJONALNOŚĆ: offline zgodność (TF-IDF cosine) ---
+def estimate_summary_similarity_tfidf(original_text, summary):
+    if not original_text or not original_text.strip() or not summary or not summary.strip():
+        return 0.0
+
+    vect = TfidfVectorizer(stop_words=None)
+    X = vect.fit_transform([original_text, summary])
+    sim = cosine_similarity(X[0], X[1])[0][0]
+    sim = max(0.0, min(1.0, float(sim)))
+    return sim * 100.0
+# --- KONIEC DODANEJ FUNKCJONALNOŚCI ---
 
 def extract_difficult_words(text, lang="en"):
     words = [
@@ -284,6 +359,16 @@ def index():
         #test
         summary = summarize_auto(text, summary_length=summary_length)
         
+        # --- DODANA FUNKCJONALNOŚĆ: procent zgodności streszczenia z tekstem ---
+        faithfulness_percent = estimate_summary_faithfulness(text, summary)
+        # --- KONIEC DODANEJ FUNKCJONALNOŚCI ---
+        
+        # --- DODANA FUNKCJONALNOŚĆ: NLI jeśli dostępne, inaczej TF-IDF ---
+        faithfulness_percent = estimate_summary_faithfulness(text, summary)
+        if faithfulness_percent is None:
+            faithfulness_percent = estimate_summary_similarity_tfidf(text, summary)
+        # --- KONIEC DODANEJ FUNKCJONALNOŚCI ---
+
         difficult_words = extract_difficult_words(text, lang)
         definitions = get_definitions(difficult_words[:10], lang)
 
@@ -295,6 +380,7 @@ def index():
         return render_template(
             'result.html',
             summary=summary,
+            faithfulness_percent=faithfulness_percent,
             definitions=definitions,
             original_text=text,
             lang=lang,
