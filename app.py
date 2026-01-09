@@ -12,7 +12,25 @@ app = Flask(__name__)
 print("Ładowanie modelu do streszczania...")
 summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
 print("Model załadowany.")
+#test
+MIN_INPUT_TOKENS = 60
+MIN_CLEAN_WORDS = 30
 
+def is_text_too_short(text):
+    if not text or not text.strip():
+        return True
+
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    words = [w.strip(string.punctuation) for w in cleaned.split() if w.strip(string.punctuation)]
+    clean_words_count = sum(1 for w in words if any(ch.isalpha() for ch in w))
+
+    try:
+        token_count = len(summarizer.tokenizer.encode(cleaned, add_special_tokens=False))
+    except Exception:
+        token_count = 0
+
+    return token_count < MIN_INPUT_TOKENS or clean_words_count < MIN_CLEAN_WORDS
+#test
 
 def summarize_auto(text, summary_length="medium"):
     tokenizer = summarizer.tokenizer
@@ -260,7 +278,10 @@ def index():
         
         if not text:
             return render_template('index.html', error="Please enter some text.")
-
+        #test
+        if is_text_too_short(text):
+            return render_template('index.html', error="The provided text is too short.")
+        #test
         summary = summarize_auto(text, summary_length=summary_length)
         
         difficult_words = extract_difficult_words(text, lang)
