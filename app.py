@@ -275,12 +275,12 @@ def index():
         text = request.form.get('text')
         lang = request.form.get('lang', 'en')
         summary_length = request.form.get('summary_length', 'medium')
-        
-        if not text:
-            return render_template('index.html', error="Please enter some text.")
         #test
+        if not text:
+            return render_template('index.html', error="Please enter some text.", original_text=text or "", lang=lang, summary_length=summary_length)
+      
         if is_text_too_short(text):
-            return render_template('index.html', error="The provided text is too short.")
+            return render_template('index.html', error="The provided text is too short.", original_text=text, lang=lang, summary_length=summary_length)
         #test
         summary = summarize_auto(text, summary_length=summary_length)
         
@@ -301,7 +301,8 @@ def index():
             summary_length_label=summary_length_labels.get(summary_length),
         )
     
-    return render_template('index.html')
+    #return render_template('index.html')
+    return render_template('index.html', original_text="", lang="en", summary_length="medium")
 
 @app.route('/download/<format>', methods=['POST'])
 def download(format):
