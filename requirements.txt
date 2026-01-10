@@ -5,4 +5,4 @@ fpdf
 requests
 torch
 scikit-learn
-transformers
+sentence-transformers
