@@ -510,7 +510,6 @@ def index():
             'result.html',
             summary=summary,
             faithfulness_percent=faithfulness_percent,
-            faithfulness_percent=faithfulness_percent,
             definitions=definitions,
             original_text=text,
             lang=lang,
