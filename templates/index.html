@@ -128,11 +128,8 @@
          (POST /)
          ========================= -->
     <form method="POST">
-        <label for="text">Wpisz tekst do streszczenia:</label><br>
-         <!-- DODANA FUNKCJONALNOŚĆ: zachowanie wklejonego tekstu -->
-        <textarea name="text" id="text" required>{{ original_text or '' }}</textarea><br>
-        <!-- KONIEC DODANEJ FUNKCJONALNOŚCI -->
-        <!--<textarea name="text" id="text" required></textarea><br>-->
+        <div class="section">
+            <input type="hidden" name="text" id="hiddenTextForSummary">
 
             <label for="summary_length">Długość streszczenia:</label>
             <select name="summary_length" id="summary_length">
@@ -228,8 +225,13 @@
         const hiddenTranslate = document.getElementById("hiddenTextForTranslate");
 
         function syncHiddenInputs() {
-            hiddenSummary.value = mainText.value;
-            hiddenTranslate.value = mainText.value;
+            const value = mainText.value;
+            if (hiddenSummary) {
+                hiddenSummary.value = value;
+            }
+            if (hiddenTranslate) {
+                hiddenTranslate.value = value;
+            }
         }
 
         // aktualizuj przy wpisywaniu i przed submit

@@ -34,7 +34,6 @@ def is_text_too_short(text):
         token_count = 0
 
     return token_count < MIN_INPUT_TOKENS or clean_words_count < MIN_CLEAN_WORDS
-#test
 
 def summarize_auto(text, summary_length="medium"):
     tokenizer = summarizer.tokenizer
@@ -417,7 +416,14 @@ def index():
             )
       
         if is_text_too_short(text):
-            return render_template('index.html', error="The provided text is too short.", original_text=text, lang=lang, summary_length=summary_length)
+            return render_template(
+                'index.html',
+                error="The provided text is too short.",
+                original_text=text,
+                lang=lang,
+                summary_length=summary_length,
+                translation_langs=SUPPORTED_TRANSLATION_LANGS,
+            )
         #test
         summary = summarize_auto(text, summary_length=summary_length)
         
