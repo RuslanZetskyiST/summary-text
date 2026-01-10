@@ -4,4 +4,5 @@ sentencepiece
 fpdf
 requests
 torch
+scikit-learn
 sacremoses

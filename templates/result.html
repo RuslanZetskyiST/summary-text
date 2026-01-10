@@ -89,31 +89,34 @@
             float: right;
             margin-bottom: 10px;
         }
+
+        /* test */
+        textarea {
+            width: 100%;
+            padding: 10px;
+            margin-top: 5px;
+            background: var(--card);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            resize: vertical;
+        }
+        /* test */
     </style>
 </head>
 
 <body>
-    <button class="theme-toggle" id="themeToggle">🌙 Ciemny motyw</button>
+   <button class="theme-toggle" id="themeToggle">🌙 Ciemny motyw</button>
     <h1>Wynik streszczenia</h1>
+
+    <!-- DODANA FUNKCJONALNOŚĆ: 1) pole z wklejonym tekstem -->
     <div class="summary-box">
-        <h3>Streszczenie:</h3>
-        {% if summary_length_label %}
-        <p><strong>Długość:</strong> {{ summary_length_label }}</p>
-        {% endif %}
-        <p>{{ summary }}</p>
+        <h3>Oryginalny tekst:</h3>
+        <textarea readonly rows="10">{{ original_text }}</textarea>
     </div>
+    <!-- KONIEC DODANEJ FUNKCJONALNOŚCI -->
 
-    <div class="download-buttons">
-        <form action="/download/txt" method="POST" style="display:inline;">
-            <input type="hidden" name="summary" value="{{ summary }}">
-            <button type="submit">Pobierz TXT</button>
-        </form>
-        <form action="/download/pdf" method="POST" style="display:inline;">
-            <input type="hidden" name="summary" value="{{ summary }}">
-            <button type="submit">Pobierz PDF</button>
-        </form>
-    </div>
-
+    <!-- DODANA FUNKCJONALNOŚĆ: 2) definicje pod tekstem -->
     <div class="definitions">
         <h3>Trudne słowa i definicje ({{ lang }}):</h3>
         {% if definitions %}
@@ -133,6 +136,33 @@
         <p>Nie znaleziono trudnych słów lub definicje są niedostępne.</p>
         {% endif %}
     </div>
+    <!-- KONIEC DODANEJ FUNKCJONALNOŚCI -->
+
+    <!-- DODANA FUNKCJONALNOŚĆ: 3) pole ze skróconym tekstem -->
+    <div class="summary-box">
+        <h3>Streszczenie:</h3>
+        {% if summary_length_label %}
+        <p><strong>Długość:</strong> {{ summary_length_label }}</p>
+        {% endif %}
+         {% if faithfulness_percent is not none %}
+        <p><strong>Zgodność (TF-IDF):</strong> {{ faithfulness_percent|round(1) }}%</p>
+        {% endif %}
+        <textarea readonly rows="8">{{ summary }}</textarea>
+    </div>
+    <!-- KONIEC DODANEJ FUNKCJONALNOŚCI -->
+
+    <!-- DODANA FUNKCJONALNOŚĆ: 4) przyciski pobrania pod streszczeniem -->
+    <div class="download-buttons">
+        <form action="/download/txt" method="POST" style="display:inline;">
+            <input type="hidden" name="summary" value="{{ summary }}">
+            <button type="submit">Pobierz TXT</button>
+        </form>
+        <form action="/download/pdf" method="POST" style="display:inline;">
+            <input type="hidden" name="summary" value="{{ summary }}">
+            <button type="submit">Pobierz PDF</button>
+        </form>
+    </div>
+    <!-- KONIEC DODANEJ FUNKCJONALNOŚCI -->
 
     <br>
     <a href="/">Powrót do strony głównej</a>
