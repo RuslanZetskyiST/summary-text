@@ -1,13 +1,65 @@
 from flask import Flask, render_template, request, send_file, Response
+from flask import jsonify
 from transformers import pipeline
 from fpdf import FPDF
 import requests
 import re
 import string
 import io
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from transformers import MarianMTModel, MarianTokenizer
+
+SUPPORTED_TRANSLATION_LANGS = ["pl", "en", "de", "es"]
+
+MARIAN_MODEL_MAP = {
+    ("en", "pl"): "Helsinki-NLP/opus-mt-en-pl",
+    ("pl", "en"): "Helsinki-NLP/opus-mt-pl-en",
+    ("de", "pl"): "Helsinki-NLP/opus-mt-de-pl",
+    ("pl", "de"): "Helsinki-NLP/opus-mt-pl-de",
+    ("es", "pl"): "Helsinki-NLP/opus-mt-es-pl",
+    ("pl", "es"): "Helsinki-NLP/opus-mt-pl-es",
+    ("en", "de"): "Helsinki-NLP/opus-mt-en-de",
+    ("de", "en"): "Helsinki-NLP/opus-mt-de-en",
+    ("en", "es"): "Helsinki-NLP/opus-mt-en-es",
+    ("es", "en"): "Helsinki-NLP/opus-mt-es-en",
+    ("de", "es"): "Helsinki-NLP/opus-mt-de-es",
+    ("es", "de"): "Helsinki-NLP/opus-mt-es-de",
+}
+
+_translation_cache = {}
+
+def get_marian_translator(src_lang: str, tgt_lang: str):
+    model_name = MARIAN_MODEL_MAP.get((src_lang, tgt_lang))
+    if not model_name:
+        return None, None, None
+
+    if model_name in _translation_cache:
+        return _translation_cache[model_name]
+
+    tokenizer = MarianTokenizer.from_pretrained(model_name)
+    model = MarianMTModel.from_pretrained(model_name)
+
+    _translation_cache[model_name] = (model_name, tokenizer, model)
+    return _translation_cache[model_name]
+
+def translate_text(text: str, src_lang: str, tgt_lang: str) -> str:
+    model_name, tokenizer, model = get_marian_translator(src_lang, tgt_lang)
+    if not model_name:
+        raise ValueError(f"Brak modelu Marian dla pary {src_lang}->{tgt_lang}")
+
+    inputs = tokenizer([text], return_tensors="pt", truncation=True)
+    translated = model.generate(**inputs, max_length=512)
+    return tokenizer.decode(translated[0], skip_special_tokens=True)
 
 app = Flask(__name__)
 
+def read_text_from_txt(file_storage) -> str:
+    content = file_storage.read()
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content.decode("latin-1")
 
 print("Ładowanie modelu do streszczania...")
 summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
@@ -167,6 +219,85 @@ def detect_language():
 
     return {"lang": lang}
 
+# --- DODANA FUNKCJONALNOŚĆ: ocena zgodności streszczenia (NLI entailment) ---
+nli_checker = None
+try:
+    nli_checker = pipeline(
+        "text-classification",
+        model="facebook/bart-large-mnli",
+        truncation=True,
+    )
+except Exception as e:
+    print(f"Nie udało się załadować modelu NLI (sprawdzanie zgodności). Pomijam. Błąd: {e}")
+
+def estimate_summary_faithfulness(original_text, summary):
+    if not nli_checker:
+        return None
+
+    if not original_text or not original_text.strip() or not summary or not summary.strip():
+        return 0.0
+
+    tokenizer = summarizer.tokenizer
+
+    chunk_size = 256
+    ids = tokenizer.encode(original_text, add_special_tokens=False)
+
+    chunks = []
+    for i in range(0, len(ids), chunk_size):
+        chunk_ids = ids[i:i + chunk_size]
+        chunk_text = tokenizer.decode(chunk_ids, skip_special_tokens=True).strip()
+        if chunk_text:
+            chunks.append(chunk_text)
+
+    if not chunks:
+        return 0.0
+
+    chunks = chunks[:10]
+
+    entail_scores = []
+    weights = []
+
+    for ch in chunks:
+        out = nli_checker(
+            {"text": ch, "text_pair": summary},
+            return_all_scores=True
+        )
+
+        scores = []
+        if isinstance(out, list) and out:
+            if isinstance(out[0], list):
+                scores = out[0]
+            elif isinstance(out[0], dict):
+                scores = out
+
+        entail = None
+
+        for s in scores:
+            lab = str(s.get("label", "")).upper()
+            if "ENTAIL" in lab or lab == "LABEL_2":
+                entail = float(s.get("score", 0.0))
+                break
+
+        if entail is None:
+            entail = 0.0
+
+        entail_scores.append(entail)
+        weights.append(max(1, len(ch)))
+
+    weighted = sum(s * w for s, w in zip(entail_scores, weights)) / sum(weights)
+    return weighted * 100.0
+# --- KONIEC DODANEJ FUNKCJONALNOŚCI ---
+# --- DODANA FUNKCJONALNOŚĆ: offline zgodność (TF-IDF cosine) ---
+def estimate_summary_similarity_tfidf(original_text, summary):
+    if not original_text or not original_text.strip() or not summary or not summary.strip():
+        return 0.0
+
+    vect = TfidfVectorizer(stop_words=None)
+    X = vect.fit_transform([original_text, summary])
+    sim = cosine_similarity(X[0], X[1])[0][0]
+    sim = max(0.0, min(1.0, float(sim)))
+    return sim * 100.0
+# --- KONIEC DODANEJ FUNKCJONALNOŚCI ---
 
 def extract_difficult_words(text, lang="en"):
     words = [
@@ -272,18 +403,90 @@ def get_definitions(words, lang="en"):
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
-        text = request.form.get('text')
+        action = request.form.get("action", "summarize")
+        
+        text = request.form.get('text', '').strip()
+        uploaded_file = request.files.get("text_file")
+
+        if uploaded_file and uploaded_file.filename:
+            if not uploaded_file.filename.lower().endswith(".txt"):
+                return render_template(
+                    "index.html",
+                    error="Obsługiwane są tylko pliki .txt",
+                    original_text=text
+                )
+
+            text = read_text_from_txt(uploaded_file).strip()
+        
+        
         lang = request.form.get('lang', 'en')
         summary_length = request.form.get('summary_length', 'medium')
         #test
         if not text:
             return render_template('index.html', error="Please enter some text.", original_text=text or "", lang=lang, summary_length=summary_length)
-      
+        
+         # jeśli kliknięto "Tłumacz"
+        if action == "translate":
+            to_lang = request.form.get("to_lang", "en")
+
+            # wykryj źródłowy język (masz już lang_detector)
+            detected = lang_detector(text[:500])[0]["label"]
+
+            # walidacja
+            if detected not in SUPPORTED_TRANSLATION_LANGS:
+                return render_template(
+                    'index.html',
+                    error=f"Nieobsługiwany język wejściowy: {detected}",
+                    original_text=text,
+                    lang=lang,
+                    summary_length=summary_length
+                )
+            if to_lang not in SUPPORTED_TRANSLATION_LANGS:
+                return render_template(
+                    'index.html',
+                    error=f"Nieobsługiwany język docelowy: {to_lang}",
+                    original_text=text,
+                    lang=lang,
+                    summary_length=summary_length
+                )
+            if detected == to_lang:
+                translated = text
+            else:
+                try:
+                    translated = translate_text(text, detected, to_lang)
+                except Exception as e:
+                    return render_template(
+                        'index.html',
+                        error=f"Błąd tłumaczenia: {e}",
+                        original_text=text,
+                        lang=lang,
+                        summary_length=summary_length
+                    )
+
+            return render_template(
+                "result_translate.html",
+                original_text=text,
+                translated_text=translated,
+                from_lang=detected,
+                to_lang=to_lang
+            )
+            
         if is_text_too_short(text):
             return render_template('index.html', error="The provided text is too short.", original_text=text, lang=lang, summary_length=summary_length)
+        
         #test
         summary = summarize_auto(text, summary_length=summary_length)
         
+        # --- DODANA FUNKCJONALNOŚĆ: procent zgodności streszczenia z tekstem ---
+        faithfulness_percent = estimate_summary_faithfulness(text, summary)
+        # --- KONIEC DODANEJ FUNKCJONALNOŚCI ---
+        
+        # --- DODANA FUNKCJONALNOŚĆ: NLI jeśli dostępne, inaczej TF-IDF ---
+        faithfulness_percent = estimate_summary_faithfulness(text, summary)
+        if faithfulness_percent is None:
+            faithfulness_percent = estimate_summary_similarity_tfidf(text, summary)
+        # --- KONIEC DODANEJ FUNKCJONALNOŚCI ---
+
         difficult_words = extract_difficult_words(text, lang)
         definitions = get_definitions(difficult_words[:10], lang)
 
@@ -295,6 +498,7 @@ def index():
         return render_template(
             'result.html',
             summary=summary,
+            faithfulness_percent=faithfulness_percent,
             definitions=definitions,
             original_text=text,
             lang=lang,
@@ -303,6 +507,23 @@ def index():
     
     #return render_template('index.html')
     return render_template('index.html', original_text="", lang="en", summary_length="medium")
+
+@app.route("/detect-lang", methods=["POST"])
+def detect_lang():
+    payload = request.get_json(silent=True) or {}
+    text = (payload.get("text") or "").strip()
+
+    if not text:
+        return jsonify({"ok": False, "error": "empty"}), 400
+
+    # bierzemy mały fragment żeby było szybciej
+    sample = text[:500]
+
+    try:
+        detected = lang_detector(sample)[0]["label"]
+        return jsonify({"ok": True, "lang": detected})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route('/download/<format>', methods=['POST'])
 def download(format):
