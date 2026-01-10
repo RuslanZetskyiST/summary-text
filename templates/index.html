@@ -72,6 +72,35 @@
             float: right;
             margin-bottom: 10px;
         }
+
+        .section {
+            margin-top: 22px;
+            padding: 14px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+        }
+
+        .row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .row>div {
+            flex: 1 1 160px;
+        }
+
+        .row button {
+            margin-top: 18px;
+            flex: 0 0 auto;
+        }
+
+        .small {
+            font-size: 14px;
+            opacity: 0.9;
+        }
     </style>
 
 </head>
@@ -79,31 +108,102 @@
 <body>
     <button class="theme-toggle" id="themeToggle">🌙 Ciemny motyw</button>
     <h1>Streszczanie tekstu</h1>
+
     {% if error %}
     <p class="error">{{ error }}</p>
     {% endif %}
+
+    {% if translation_error %}
+    <p class="error">{{ translation_error }}</p>
+    {% endif %}
+
+    <!-- =========================
+         WSPÓLNY TEKST (1 textarea)
+         ========================= -->
+    <label for="text">Wpisz tekst:</label><br>
+    <textarea name="text" id="text" required>{{ original_text or "" }}</textarea><br>
+
+    <!-- =========================
+         FORMULARZ: STRESZCZANIE
+         (POST /)
+         ========================= -->
     <form method="POST">
-        <label for="text">Wpisz tekst do streszczenia:</label><br>
-        <textarea name="text" id="text" required></textarea><br>
+        <!-- kopiujemy textarea do formularza przy submit -->
+        <input type="hidden" name="text" id="hiddenTextForSummary">
 
-        <label for="summary_length">Długość streszczenia:</label>
-        <select name="summary_length" id="summary_length">
-            <option value="short">krótkie</option>
-            <option value="medium" selected>średnie</option>
-            <option value="long">długie</option>
-        </select><br><br>
+        <div class="section">
+            <h3 style="margin-top:0;">Streszczanie</h3>
 
-        <p id="detected-lang">Odnaleziony język: —</p>
-        <label for="lang">Język definicji:</label>
-        <select name="lang" id="lang">
-            <option value="en">angielski</option>
-            <option value="pl">polski</option>
-            <option value="de">niemiecki</option>
-            <option value="es">hiszpański</option>
-        </select><br><br>
+            <label for="summary_length">Długość streszczenia:</label>
+            <select name="summary_length" id="summary_length">
+                <option value="short">krótkie</option>
+                <option value="medium" selected>średnie</option>
+                <option value="long">długie</option>
+            </select><br><br>
 
-        <button type="submit">Streszczaj</button>
+            <p id="detected-lang">Odnaleziony język: —</p>
+            <label for="lang">Język definicji:</label>
+            <select name="lang" id="lang">
+                <option value="en">angielski</option>
+                <option value="pl">polski</option>
+                <option value="de">niemiecki</option>
+                <option value="es">hiszpański</option>
+            </select><br><br>
+
+            <button type="submit" id="btnSummarize">Streszczaj</button>
+        </div>
     </form>
+
+    <!-- =========================
+         FORMULARZ: TŁUMACZENIE
+         (POST /translate)
+         ========================= -->
+    <form method="POST" action="/translate">
+        <!-- kopiujemy textarea do formularza przy submit -->
+        <input type="hidden" name="text" id="hiddenTextForTranslate">
+
+        <div class="section">
+            <h3 style="margin-top:0;">Tłumaczenie</h3>
+            <p class="small">Wybierz język źródłowy i docelowy, potem kliknij „Tłumacz”.</p>
+
+            <div class="row">
+                <div>
+                    <label for="source_lang">Z:</label>
+                    <select name="source_lang" id="source_lang">
+                        {% for l in translation_langs %}
+                        <option value="{{ l }}" {% if source_lang==l %}selected{% endif %}>{{ l }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div>
+                    <label for="target_lang">Na:</label>
+                    <select name="target_lang" id="target_lang">
+                        {% for l in translation_langs %}
+                        <option value="{{ l }}" {% if target_lang==l %}selected{% endif %}>{{ l }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div>
+                    <label for="engine">Silnik:</label>
+                    <select name="engine" id="engine">
+                        <option value="auto" {% if engine=="auto" or not engine %}selected{% endif %}>auto</option>
+                        <option value="marian" {% if engine=="marian" %}selected{% endif %}>marian</option>
+                        <option value="nllb" {% if engine=="nllb" %}selected{% endif %}>nllb</option>
+                    </select>
+                </div>
+
+                <button type="submit" id="btnTranslate">Tłumacz</button>
+            </div>
+
+            {% if translated_text %}
+            <h4>Wynik tłumaczenia</h4>
+            <textarea rows="10" style="height:200px;" readonly>{{ translated_text }}</textarea>
+            {% endif %}
+        </div>
+    </form>
+
     <script>
         const toggleBtn = document.getElementById("themeToggle");
         const body = document.body;
@@ -122,17 +222,32 @@
             toggleBtn.textContent = isDark ? "☀️ Jasny motyw" : "🌙 Ciemny motyw";
         });
 
+        // 1) kopiowanie wspólnego textarea -> hidden input w formularzach
+        const mainText = document.getElementById("text");
+        const hiddenSummary = document.getElementById("hiddenTextForSummary");
+        const hiddenTranslate = document.getElementById("hiddenTextForTranslate");
+
+        function syncHiddenInputs() {
+            hiddenSummary.value = mainText.value;
+            hiddenTranslate.value = mainText.value;
+        }
+
+        // aktualizuj przy wpisywaniu i przed submit
+        mainText.addEventListener("input", syncHiddenInputs);
+        document.getElementById("btnSummarize").addEventListener("click", syncHiddenInputs);
+        document.getElementById("btnTranslate").addEventListener("click", syncHiddenInputs);
+
+        // 2) wykrywanie języka (Twoje)
         async function detectLanguage() {
-            const textarea = document.querySelector("textarea[name='text']");
             const select = document.querySelector("select[name='lang']");
             const output = document.getElementById("detected-lang");
 
-            if (!textarea.value.trim()) return;
+            if (!mainText.value.trim()) return;
 
             const res = await fetch("/detect-language", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ text: textarea.value })
+                body: JSON.stringify({ text: mainText.value })
             });
 
             const data = await res.json();
@@ -154,14 +269,14 @@
             if (data.lang) {
                 output.innerHTML = "Odnaleziony język: " + (map[data.lang] || data.lang) + (mapFlags[data.lang] || "");
                 if (map[data.lang]) select.value = data.lang;
-                if (mapFlags[data.lang]) select.value = data.lang;
             }
         }
 
-        document.querySelector("textarea[name='text']")
-            .addEventListener("blur", detectLanguage);
+        mainText.addEventListener("blur", detectLanguage);
+
+        // inicjalnie zsynchronizuj hiddeny (np. po renderze z backendu)
+        syncHiddenInputs();
     </script>
 
 </body>
-
 </html>

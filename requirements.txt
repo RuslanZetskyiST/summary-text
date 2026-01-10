@@ -4,3 +4,4 @@ sentencepiece
 fpdf
 requests
 torch
+sacremoses

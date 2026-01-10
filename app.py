@@ -1,5 +1,5 @@
-from flask import Flask, render_template, request, send_file, Response
-from transformers import pipeline
+from flask import Flask, render_template, request, Response
+from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
 from fpdf import FPDF
 import requests
 import re
@@ -8,7 +8,9 @@ import io
 
 app = Flask(__name__)
 
-
+# =========================
+# SUMMARIZATION
+# =========================
 print("Ładowanie modelu do streszczania...")
 summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
 print("Model załadowany.")
@@ -40,7 +42,6 @@ def summarize_auto(text, summary_length="medium"):
     model_limit = getattr(getattr(model, "config", None), "max_position_embeddings", None)
     tokenizer_limit = getattr(tokenizer, "model_max_length", None)
 
-    max_input_tokens = None
     if isinstance(model_limit, int) and model_limit > 0:
         max_input_tokens = model_limit
     elif isinstance(tokenizer_limit, int) and 0 < tokenizer_limit < 1_000_000:
@@ -51,12 +52,7 @@ def summarize_auto(text, summary_length="medium"):
     chunk_size = max(128, max_input_tokens - 2)
 
     def summarize_once(text_part, max_len, min_len):
-        out = summarizer(
-            text_part,
-            max_length=max_len,
-            min_length=min_len,
-            do_sample=False,
-        )
+        out = summarizer(text_part, max_length=max_len, min_length=min_len, do_sample=False)
         return out[0]["summary_text"]
 
     def split_by_tokens(full_text):
@@ -73,80 +69,52 @@ def summarize_auto(text, summary_length="medium"):
     for _ in range(3):
         parts = list(split_by_tokens(current))
         if len(parts) == 1:
-            return summarize_once(
-                parts[0],
-                max_len=profile["final"]["max_length"],
-                min_len=profile["final"]["min_length"],
-            )
+            return summarize_once(parts[0], max_len=profile["final"]["max_length"], min_len=profile["final"]["min_length"])
 
         partial_summaries = [
-            summarize_once(
-                p,
-                max_len=profile["partial"]["max_length"],
-                min_len=profile["partial"]["min_length"],
-            )
+            summarize_once(p, max_len=profile["partial"]["max_length"], min_len=profile["partial"]["min_length"])
             for p in parts
         ]
         current = " ".join(partial_summaries)
 
         if len(tokenizer.encode(current, add_special_tokens=False)) <= max_input_tokens:
-            return summarize_once(
-                current,
-                max_len=profile["final_long"]["max_length"],
-                min_len=profile["final_long"]["min_length"],
-            )
+            return summarize_once(current, max_len=profile["final_long"]["max_length"], min_len=profile["final_long"]["min_length"])
 
     parts = list(split_by_tokens(current))
     partial_summaries = [
-        summarize_once(
-            p,
-            max_len=profile["partial"]["max_length"],
-            min_len=profile["partial"]["min_length"],
-        )
+        summarize_once(p, max_len=profile["partial"]["max_length"], min_len=profile["partial"]["min_length"])
         for p in parts
     ]
     return " ".join(partial_summaries)
 
+
+# =========================
+# LANGUAGE DETECTION + WORD DEFINITIONS
+# =========================
 LANG_CONFIG = {
-    "pl": {
-        "name": "polski",
-        "markers": [r'znaczenia', r'rzeczownik', r'czasownik', r'przymiotnik', r'wyrażenie'],
-    },
-    "de": {
-        "name": "Deutsch",
-        "markers": [r'Bedeutungen', r'Substantiv', r'Verb', r'Adjektiv'],
-    },
-    "es": {
-        "name": "Español",
-        "markers": [r'Sustantivo', r'Verbo', r'Adjetivo', r'Forma verbal'],
-    },
-    "en": {
-        "name": "English",
-        "markers": [r'Noun', r'Verb', r'Adjective', r'Definition'],
-    },
+    "pl": {"name": "polski", "markers": [r'znaczenia', r'rzeczownik', r'czasownik', r'przymiotnik', r'wyrażenie']},
+    "de": {"name": "Deutsch", "markers": [r'Bedeutungen', r'Substantiv', r'Verb', r'Adjektiv']},
+    "es": {"name": "Español", "markers": [r'Sustantivo', r'Verbo', r'Adjetivo', r'Forma verbal']},
+    "en": {"name": "English", "markers": [r'Noun', r'Verb', r'Adjective', r'Definition']},
 }
 
 STOPWORDS = {
-    "pl": set(["i","oraz","w","na","do","o","że","a","to","jest","z","się"]),
-    "de": set(["und","oder","die","der","das","ein","eine","ist","zu","vom","im"]),
-    "es": set(["y","o","de","la","el","que","es","en","un","una"]),
-    "en": set(["and","or","the","is","are","of","to","in","for","on","with"]),
+    "pl": set(["i", "oraz", "w", "na", "do", "o", "że", "a", "to", "jest", "z", "się"]),
+    "de": set(["und", "oder", "die", "der", "das", "ein", "eine", "ist", "zu", "vom", "im"]),
+    "es": set(["y", "o", "de", "la", "el", "que", "es", "en", "un", "una"]),
+    "en": set(["and", "or", "the", "is", "are", "of", "to", "in", "for", "on", "with"]),
 }
 
-lang_detector = pipeline(
-    "text-classification",
-    model="papluca/xlm-roberta-base-language-detection"
-)
+lang_detector = pipeline("text-classification", model="papluca/xlm-roberta-base-language-detection")
+
 
 @app.route('/detect-language', methods=['POST'])
 def detect_language():
     text = request.json.get("text", "")
     if not text.strip():
         return {"lang": None}
-
     result = lang_detector(text[:500])
     lang = result[0]["label"]
-
     return {"lang": lang}
 
 
@@ -157,11 +125,9 @@ def extract_difficult_words(text, lang="en"):
         if w.strip(string.punctuation)
     ]
     stop = STOPWORDS.get(lang, set())
-    difficult = [
-        w for w in words
-        if len(w) > 5 and w not in stop and w.isalpha()
-    ]
+    difficult = [w for w in words if len(w) > 5 and w not in stop and w.isalpha()]
     return list(sorted(set(difficult)))
+
 
 def get_definitions(words, lang="en"):
     result = {}
@@ -185,10 +151,10 @@ def get_definitions(words, lang="en"):
             r = requests.get(url, params=params, headers=headers)
             r.raise_for_status()
             data = r.json()
-            
+
             pages = data.get("query", {}).get("pages", {})
             page_id = next(iter(pages))
-            
+
             if page_id == "-1":
                 result[word] = ["Brak definicji."]
                 continue
@@ -202,7 +168,7 @@ def get_definitions(words, lang="en"):
             in_lang_section = False
             in_def_block = False
             definitions = []
-            
+
             lang_header = re.compile(
                 rf"^==\s*{cfg['name']}\s*==$|^==\s*język {cfg['name']}\s*==$",
                 re.IGNORECASE
@@ -235,14 +201,8 @@ def get_definitions(words, lang="en"):
                             definitions.append(clean)
 
             if not definitions:
-                first = next(
-                    (l.strip() for l in lines if len(l.strip()) > 40 and not l.startswith("==")),
-                    None
-                )
-                if first:
-                    definitions = [first]
-                else:
-                    definitions = ["Nie udało się odczytać definicji."]
+                first = next((l.strip() for l in lines if len(l.strip()) > 40 and not l.startswith("==")), None)
+                definitions = [first] if first else ["Nie udało się odczytać definicji."]
 
             result[word] = definitions[:5]
 
@@ -251,26 +211,125 @@ def get_definitions(words, lang="en"):
 
     return result
 
+
+# =========================
+# TRANSLATION (Marian + fallback NLLB)
+# =========================
+SUPPORTED_TRANSLATION_LANGS = ["pl", "en", "de", "es"]
+
+MARIAN_MODEL_MAP = {
+    ("en", "pl"): "Helsinki-NLP/opus-mt-en-pl",
+    ("pl", "en"): "Helsinki-NLP/opus-mt-pl-en",
+    ("de", "pl"): "Helsinki-NLP/opus-mt-de-pl",
+    ("pl", "de"): "Helsinki-NLP/opus-mt-pl-de",
+    ("es", "pl"): "Helsinki-NLP/opus-mt-es-pl",
+    ("pl", "es"): "Helsinki-NLP/opus-mt-pl-es",
+    ("en", "de"): "Helsinki-NLP/opus-mt-en-de",
+    ("de", "en"): "Helsinki-NLP/opus-mt-de-en",
+    ("en", "es"): "Helsinki-NLP/opus-mt-en-es",
+    ("es", "en"): "Helsinki-NLP/opus-mt-es-en",
+    ("de", "es"): "Helsinki-NLP/opus-mt-de-es",
+    ("es", "de"): "Helsinki-NLP/opus-mt-es-de",
+}
+
+NLLB_MODEL_NAME = "facebook/nllb-200-distilled-600M"
+NLLB_LANG_MAP = {"pl": "pol_Latn", "en": "eng_Latn", "de": "deu_Latn", "es": "spa_Latn"}
+
+# cache dla Marian pipeline
+_marian_cache = {}
+# NLLB ładowany leniwie
+_nllb_tokenizer = None
+_nllb_model = None
+
+def translate_text(text: str, src: str, tgt: str, engine: str = "auto", max_length: int = 512) -> str:
+    """
+    engine: auto | marian | nllb
+    """
+    global _nllb_tokenizer, _nllb_model
+
+    text = (text or "").strip()
+    src = (src or "").strip().lower()
+    tgt = (tgt or "").strip().lower()
+    engine = (engine or "auto").strip().lower()
+
+    if not text:
+        raise ValueError("Brak tekstu do tłumaczenia.")
+    if src not in SUPPORTED_TRANSLATION_LANGS or tgt not in SUPPORTED_TRANSLATION_LANGS:
+        raise ValueError("Nieobsługiwany język.")
+    if src == tgt:
+        return text
+
+    def marian_translate():
+        key = (src, tgt)
+        model_name = MARIAN_MODEL_MAP.get(key)
+        if not model_name:
+            raise ValueError(f"Brak modelu Marian dla {src}->{tgt}")
+
+        if key not in _marian_cache:
+            _marian_cache[key] = pipeline("translation", model=model_name, device=-1)  # CPU
+        out = _marian_cache[key](text, max_length=max_length)
+        return out[0]["translation_text"]
+
+    def nllb_translate():
+        nonlocal text
+        global _nllb_tokenizer
+        global _nllb_model
+        if _nllb_tokenizer is None or _nllb_model is None:
+            _nllb_tokenizer = AutoTokenizer.from_pretrained(NLLB_MODEL_NAME)
+            _nllb_model = AutoModelForSeq2SeqLM.from_pretrained(NLLB_MODEL_NAME)
+
+        src_code = NLLB_LANG_MAP[src]
+        tgt_code = NLLB_LANG_MAP[tgt]
+
+        _nllb_tokenizer.src_lang = src_code
+        inputs = _nllb_tokenizer(text, return_tensors="pt", truncation=True)
+
+        forced_bos_token_id = _nllb_tokenizer.convert_tokens_to_ids(tgt_code)
+        generated = _nllb_model.generate(
+            **inputs,
+            forced_bos_token_id=forced_bos_token_id,
+            max_length=max_length,
+        )
+        return _nllb_tokenizer.batch_decode(generated, skip_special_tokens=True)[0]
+
+    if engine == "marian":
+        return marian_translate()
+    if engine == "nllb":
+        return nllb_translate()
+
+    # auto
+    if (src, tgt) in MARIAN_MODEL_MAP:
+        try:
+            return marian_translate()
+        except Exception:
+            return nllb_translate()
+    return nllb_translate()
+
+
+# =========================
+# ROUTES
+# =========================
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
         text = request.form.get('text')
         lang = request.form.get('lang', 'en')
         summary_length = request.form.get('summary_length', 'medium')
-        
+
         if not text:
-            return render_template('index.html', error="Please enter some text.")
+            return render_template(
+                'index.html',
+                error="Please enter some text.",
+                translation_langs=SUPPORTED_TRANSLATION_LANGS
+            )
 
         summary = summarize_auto(text, summary_length=summary_length)
-        
+
         difficult_words = extract_difficult_words(text, lang)
         definitions = get_definitions(difficult_words[:10], lang)
 
-        summary_length_labels = {
-            "short": "krótkie",
-            "medium": "średnie",
-            "long": "długie",
-        }
+        summary_length_labels = {"short": "krótkie", "medium": "średnie", "long": "długie"}
+
         return render_template(
             'result.html',
             summary=summary,
@@ -278,9 +337,42 @@ def index():
             original_text=text,
             lang=lang,
             summary_length_label=summary_length_labels.get(summary_length),
+            translation_langs=SUPPORTED_TRANSLATION_LANGS
         )
-    
-    return render_template('index.html')
+
+    return render_template('index.html', translation_langs=SUPPORTED_TRANSLATION_LANGS)
+
+
+@app.route('/translate', methods=['POST'])
+def translate_route():
+    # działa zarówno z index, jak i z result
+    text = request.form.get("text", "")
+    src = request.form.get("source_lang", "en")
+    tgt = request.form.get("target_lang", "pl")
+    engine = request.form.get("engine", "auto")
+
+    try:
+        translated = translate_text(text, src, tgt, engine=engine)
+        return render_template(
+            "index.html",
+            translation_langs=SUPPORTED_TRANSLATION_LANGS,
+            original_text=text,
+            translated_text=translated,
+            source_lang=src,
+            target_lang=tgt,
+            engine=engine
+        )
+    except Exception as e:
+        return render_template(
+            "index.html",
+            translation_langs=SUPPORTED_TRANSLATION_LANGS,
+            original_text=text,
+            translation_error=str(e),
+            source_lang=src,
+            target_lang=tgt,
+            engine=engine
+        )
+
 
 @app.route('/download/<format>', methods=['POST'])
 def download(format):
@@ -294,14 +386,13 @@ def download(format):
             mimetype="text/plain",
             headers={"Content-disposition": "attachment; filename=summary.txt"}
         )
-    
+
     elif format == 'pdf':
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", size=12)
         pdf.multi_cell(0, 10, summary.encode('latin-1', 'replace').decode('latin-1'))
-        
-        pdf_output = io.BytesIO()
+
         val = pdf.output(dest='S').encode('latin-1')
         return Response(
             val,
@@ -312,4 +403,4 @@ def download(format):
     return "Invalid format", 400
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, port=5000)
