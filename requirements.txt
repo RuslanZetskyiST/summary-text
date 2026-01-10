@@ -6,5 +6,3 @@ requests
 torch
 scikit-learn
 transformers
-torch
-sentencepiece

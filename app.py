@@ -487,6 +487,17 @@ def index():
             faithfulness_percent = estimate_summary_similarity_tfidf(text, summary)
         # --- KONIEC DODANEJ FUNKCJONALNOŚCI ---
 
+        
+        # --- DODANA FUNKCJONALNOŚĆ: procent zgodności streszczenia z tekstem ---
+        faithfulness_percent = estimate_summary_faithfulness(text, summary)
+        # --- KONIEC DODANEJ FUNKCJONALNOŚCI ---
+        
+        # --- DODANA FUNKCJONALNOŚĆ: NLI jeśli dostępne, inaczej TF-IDF ---
+        faithfulness_percent = estimate_summary_faithfulness(text, summary)
+        if faithfulness_percent is None:
+            faithfulness_percent = estimate_summary_similarity_tfidf(text, summary)
+        # --- KONIEC DODANEJ FUNKCJONALNOŚCI ---
+
         difficult_words = extract_difficult_words(text, lang)
         definitions = get_definitions(difficult_words[:10], lang)
 
@@ -498,6 +509,7 @@ def index():
         return render_template(
             'result.html',
             summary=summary,
+            faithfulness_percent=faithfulness_percent,
             faithfulness_percent=faithfulness_percent,
             definitions=definitions,
             original_text=text,
