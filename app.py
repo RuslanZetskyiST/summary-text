@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, send_file, Response
+from flask import jsonify
 from transformers import pipeline
 from fpdf import FPDF
 import requests
@@ -7,9 +8,133 @@ import string
 import io
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from transformers import MarianMTModel, MarianTokenizer
+from sentence_transformers import SentenceTransformer
+import numpy as np
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+
+SUPPORTED_TRANSLATION_LANGS = ["pl", "en", "de", "es"]
+
+MARIAN_MODEL_MAP = {
+    ("en", "pl"): "Helsinki-NLP/opus-mt-en-pl",
+    ("pl", "en"): "Helsinki-NLP/opus-mt-pl-en",
+    ("de", "pl"): "Helsinki-NLP/opus-mt-de-pl",
+    ("pl", "de"): "Helsinki-NLP/opus-mt-pl-de",
+    ("es", "pl"): "Helsinki-NLP/opus-mt-es-pl",
+    ("pl", "es"): "Helsinki-NLP/opus-mt-pl-es",
+    ("en", "de"): "Helsinki-NLP/opus-mt-en-de",
+    ("de", "en"): "Helsinki-NLP/opus-mt-de-en",
+    ("en", "es"): "Helsinki-NLP/opus-mt-en-es",
+    ("es", "en"): "Helsinki-NLP/opus-mt-es-en",
+    ("de", "es"): "Helsinki-NLP/opus-mt-de-es",
+    ("es", "de"): "Helsinki-NLP/opus-mt-es-de",
+}
+
+# --- NLLB fallback ---
+NLLB_MODEL_NAME = "facebook/nllb-200-distilled-600M"
+NLLB_LANG_MAP = {"pl": "pol_Latn", "en": "eng_Latn", "de": "deu_Latn", "es": "spa_Latn"}
+
+_nllb_cache = {}  # {"model": (tokenizer, model)}
+
+_translation_cache = {}
+
+_embedder = None
+
+def get_embedder():
+    global _embedder
+    if _embedder is None:
+        # dobry wielojęzyczny model (PL/EN/DE/ES)
+        _embedder = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+    return _embedder
+
+def estimate_summary_similarity_embeddings(original_text, summary):
+    if not original_text or not original_text.strip() or not summary or not summary.strip():
+        return 0.0
+
+    model = get_embedder()
+
+    # normalize_embeddings=True => cosine = iloczyn skalarny
+    emb = model.encode([original_text, summary], normalize_embeddings=True)
+    sim = float(np.dot(emb[0], emb[1]))  # [-1..1], w praktyce [0..1] dla podobnych tekstów
+    sim = max(0.0, min(1.0, sim))
+    return sim * 100.0
+
+def get_marian_translator(src_lang: str, tgt_lang: str):
+    model_name = MARIAN_MODEL_MAP.get((src_lang, tgt_lang))
+    if not model_name:
+        return None, None, None
+
+    if model_name in _translation_cache:
+        return _translation_cache[model_name]
+
+    tokenizer = MarianTokenizer.from_pretrained(model_name)
+    model = MarianMTModel.from_pretrained(model_name)
+
+    _translation_cache[model_name] = (model_name, tokenizer, model)
+    return _translation_cache[model_name]
+
+def translate_text(text: str, src_lang: str, tgt_lang: str) -> str:
+    model_name, tokenizer, model = get_marian_translator(src_lang, tgt_lang)
+    if not model_name:
+        raise ValueError(f"Brak modelu Marian dla pary {src_lang}->{tgt_lang}")
+
+    inputs = tokenizer([text], return_tensors="pt", truncation=True)
+    translated = model.generate(**inputs, max_length=512)
+    return tokenizer.decode(translated[0], skip_special_tokens=True)
+
+def get_nllb_translator():
+    if "model" in _nllb_cache:
+        return _nllb_cache["model"]
+
+    tokenizer = AutoTokenizer.from_pretrained(NLLB_MODEL_NAME)
+    model = AutoModelForSeq2SeqLM.from_pretrained(NLLB_MODEL_NAME)
+
+    _nllb_cache["model"] = (tokenizer, model)
+    return tokenizer, model
+
+def translate_text_nllb(text: str, src_lang: str, tgt_lang: str) -> str:
+    if src_lang not in NLLB_LANG_MAP or tgt_lang not in NLLB_LANG_MAP:
+        raise ValueError(f"NLLB: nieobsługiwany język {src_lang}->{tgt_lang}")
+
+    tokenizer, model = get_nllb_translator()
+
+    src_code = NLLB_LANG_MAP[src_lang]
+    tgt_code = NLLB_LANG_MAP[tgt_lang]
+
+    # ustaw język źródłowy dla tokenizera
+    tokenizer.src_lang = src_code
+
+    inputs = tokenizer([text], return_tensors="pt", truncation=True)
+
+    forced_bos_token_id = tokenizer.convert_tokens_to_ids(tgt_code)
+
+    translated = model.generate(
+        **inputs,
+        forced_bos_token_id=forced_bos_token_id,
+        max_length=512
+    )
+
+    return tokenizer.decode(translated[0], skip_special_tokens=True)
+
+def translate_text_with_fallback(text: str, src_lang: str, tgt_lang: str) -> str:
+    """
+    1) Próbuje MarianMT (Twoja obecna mapa modeli)
+    2) Jeśli Marian wywali się (np. brak modelu dla pary) -> używa NLLB
+    """
+    try:
+        return translate_text(text, src_lang, tgt_lang)  # Marian
+    except Exception:
+        # fallback: NLLB
+        return translate_text_nllb(text, src_lang, tgt_lang)
 
 app = Flask(__name__)
 
+def read_text_from_txt(file_storage) -> str:
+    content = file_storage.read()
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content.decode("latin-1")
 
 print("Ładowanie modelu do streszczania...")
 summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
@@ -90,7 +215,7 @@ def summarize_auto(text, summary_length="medium"):
         return summarize_once(text, max_len=profile["final"]["max_length"], min_len=profile["final"]["min_length"])
 
     current = text
-    for _ in range(3):
+    for _ in range(2):
         parts = list(split_by_tokens(current))
         if len(parts) == 1:
             return summarize_once(
@@ -189,7 +314,7 @@ def estimate_summary_faithfulness(original_text, summary):
 
     tokenizer = summarizer.tokenizer
 
-    chunk_size = 256
+    chunk_size = 384
     ids = tokenizer.encode(original_text, add_special_tokens=False)
 
     chunks = []
@@ -202,7 +327,7 @@ def estimate_summary_faithfulness(original_text, summary):
     if not chunks:
         return 0.0
 
-    chunks = chunks[:10]
+    chunks = chunks[:4]
 
     entail_scores = []
     weights = []
@@ -213,7 +338,13 @@ def estimate_summary_faithfulness(original_text, summary):
             return_all_scores=True
         )
 
-        scores = out[0] if out and isinstance(out, list) else []
+        scores = []
+        if isinstance(out, list) and out:
+            if isinstance(out[0], list):
+                scores = out[0]
+            elif isinstance(out[0], dict):
+                scores = out
+
         entail = None
 
         for s in scores:
@@ -347,48 +478,129 @@ def get_definitions(words, lang="en"):
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
-        text = request.form.get('text')
+        action = request.form.get("action", "summarize")
+        
+        text = request.form.get('text', '').strip()
+        uploaded_file = request.files.get("text_file")
+
+        if uploaded_file and uploaded_file.filename:
+            if not uploaded_file.filename.lower().endswith(".txt"):
+                return render_template(
+                    "index.html",
+                    error="Obsługiwane są tylko pliki .txt",
+                    original_text=text
+                )
+
+            text = read_text_from_txt(uploaded_file).strip()
+        
+        
         lang = request.form.get('lang', 'en')
         summary_length = request.form.get('summary_length', 'medium')
         #test
         if not text:
             return render_template('index.html', error="Please enter some text.", original_text=text or "", lang=lang, summary_length=summary_length)
-      
+        
+         # jeśli kliknięto "Tłumacz"
+        if action == "translate":
+            to_lang = request.form.get("to_lang", "en")
+
+            # wykryj źródłowy język (masz już lang_detector)
+            detected = lang_detector(text[:500])[0]["label"]
+
+            # walidacja
+            if detected not in SUPPORTED_TRANSLATION_LANGS:
+                return render_template(
+                    'index.html',
+                    error=f"Nieobsługiwany język wejściowy: {detected}",
+                    original_text=text,
+                    lang=lang,
+                    summary_length=summary_length
+                )
+            if to_lang not in SUPPORTED_TRANSLATION_LANGS:
+                return render_template(
+                    'index.html',
+                    error=f"Nieobsługiwany język docelowy: {to_lang}",
+                    original_text=text,
+                    lang=lang,
+                    summary_length=summary_length
+                )
+            if detected == to_lang:
+                translated = text
+            else:
+                try:
+                    translated = translate_text_with_fallback(text, detected, to_lang)
+                except Exception as e:
+                    return render_template(
+                        'index.html',
+                        error=f"Błąd tłumaczenia: {e}",
+                        original_text=text,
+                        lang=lang,
+                        summary_length=summary_length
+                    )
+
+            return render_template(
+                "result_translate.html",
+                original_text=text,
+                translated_text=translated,
+                from_lang=detected,
+                to_lang=to_lang
+            )
+            
         if is_text_too_short(text):
             return render_template('index.html', error="The provided text is too short.", original_text=text, lang=lang, summary_length=summary_length)
+        
         #test
         summary = summarize_auto(text, summary_length=summary_length)
         
-        # --- DODANA FUNKCJONALNOŚĆ: procent zgodności streszczenia z tekstem ---
-        faithfulness_percent = estimate_summary_faithfulness(text, summary)
-        # --- KONIEC DODANEJ FUNKCJONALNOŚCI ---
-        
-        # --- DODANA FUNKCJONALNOŚĆ: NLI jeśli dostępne, inaczej TF-IDF ---
-        faithfulness_percent = estimate_summary_faithfulness(text, summary)
-        if faithfulness_percent is None:
-            faithfulness_percent = estimate_summary_similarity_tfidf(text, summary)
-        # --- KONIEC DODANEJ FUNKCJONALNOŚCI ---
+        tfidf_similarity = estimate_summary_similarity_tfidf(text, summary)
+
+        embedding_similarity = None
+        try:
+            embedding_similarity = estimate_summary_similarity_embeddings(text, summary)
+        except Exception as e:
+            # embeddings są opcjonalne – nie przerywamy działania aplikacji
+            embedding_similarity = None
+            
 
         difficult_words = extract_difficult_words(text, lang)
-        definitions = get_definitions(difficult_words[:10], lang)
+        definitions = get_definitions(difficult_words[:5], lang)
 
         summary_length_labels = {
             "short": "krótkie",
             "medium": "średnie",
             "long": "długie",
         }
+        
         return render_template(
-            'result.html',
-            summary=summary,
-            faithfulness_percent=faithfulness_percent,
-            definitions=definitions,
-            original_text=text,
-            lang=lang,
-            summary_length_label=summary_length_labels.get(summary_length),
+               'result.html',
+                summary=summary,
+                tfidf_similarity=tfidf_similarity,
+                embedding_similarity=embedding_similarity,
+                definitions=definitions,
+                original_text=text,
+                lang=lang,
+                summary_length_label=summary_length_labels.get(summary_length),
         )
     
     #return render_template('index.html')
     return render_template('index.html', original_text="", lang="en", summary_length="medium")
+
+@app.route("/detect-lang", methods=["POST"])
+def detect_lang():
+    payload = request.get_json(silent=True) or {}
+    text = (payload.get("text") or "").strip()
+
+    if not text:
+        return jsonify({"ok": False, "error": "empty"}), 400
+
+    # bierzemy mały fragment żeby było szybciej
+    sample = text[:500]
+
+    try:
+        detected = lang_detector(sample)[0]["label"]
+        return jsonify({"ok": True, "lang": detected})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route('/download/<format>', methods=['POST'])
 def download(format):
